@@ -12,9 +12,9 @@
 class ArtificialOccupy : public rclcpp::Node {
 public:
 	ArtificialOccupy() : Node("artificial_occupy") {
-		rmw_qos_profile_t qos_profile = rmw_qos_profile_sensor_data;
+		rmw_qos_profile_t qos_profile = rmw_qos_profile_default;  
 		auto qos = rclcpp::QoS(rclcpp::QoSInitialization(qos_profile.history, 10), qos_profile);
-		publisher_ = this->create_publisher<sensor_msgs::msg::LaserScan>("/ao", qos);
+		publisher_ = this->create_publisher<sensor_msgs::msg::LaserScan>("/scan_ao", qos);
 
 		auto callback = [this](const std::shared_ptr<rmw_request_id_t> request_header,
 						const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
@@ -32,50 +32,100 @@ public:
 
 		service_ = this->create_service<std_srvs::srv::SetBool>("ON_OFF", callback);
 		
-		subscrition_ = this->create_subscription<std_msgs::msg::Float32MultiArray>
-			("/utm_coordinates", 10, std::bind(&ArtificialOccupy::callback, this, std::placeholders::_1));
-
 		odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
             "/odom", 10, std::bind(&ArtificialOccupy::odomCallback, this, std::placeholders::_1));
     
 
-		RCLCPP_INFO(this->get_logger(), "ArtificialOccupy : ON");	
-		
-		blockPos.emplace_back(334215.28125, 4143040.5);
+		RCLCPP_INFO(this->get_logger(), "ArtificialOccupy : ON");
+		// blockPos.emplace_back(7, -2);
+		ServiceBlockPos.emplace_back(9, -2);
 
 	}
 
 
 private:
-	void callback(const std_msgs::msg::Float32MultiArray::SharedPtr msg) {
-		if(!isRun)
-			return;
+	geometry_msgs::msg::Vector3 quaternionToEuler(const geometry_msgs::msg::Quaternion& q) {
+		geometry_msgs::msg::Vector3 euler;
 
-		static auto lastExecutionTime = std::chrono::high_resolution_clock::now();
-		auto currentTime = std::chrono::high_resolution_clock::now();
-		auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(currentTime - lastExecutionTime).count();
-		if(duration < 100)
-			return;
+		double t0 = +2.0 * (q.w * q.x + q.y * q.z);
+		double t1 = +1.0 - 2.0 * (q.x * q.x + q.y * q.y);
+		euler.x = std::atan2(t0, t1);
 
-		auto& inst = *msg;
-		float& x = inst.data[0];
-		float& y = inst.data[1];
+		double t2 = +2.0 * (q.w * q.y - q.z * q.x);
+		t2 = t2 > 1.0 ? 1.0 : t2;
+		t2 = t2 < -1.0 ? -1.0 : t2;
+		euler.y = std::asin(t2);
+
+		double t3 = +2.0 * (q.w * q.z + q.x * q.y);
+		double t4 = +1.0 - 2.0 * (q.y * q.y + q.z * q.z);
+		euler.z = std::atan2(t3, t4);
+
+		return euler;
+	}
+
+    void odomCallback(const nav_msgs::msg::Odometry::SharedPtr msg) {
+		static auto lastCallTime =  std::chrono::steady_clock::now();
+		auto currentTime = std::chrono::steady_clock::now();
+        auto elapsedTime = std::chrono::duration_cast<std::chrono::milliseconds>(currentTime - lastCallTime);
+
+        if (elapsedTime.count() < 100) 
+            return;
+        lastCallTime = currentTime;
+
+		double direction = quaternionToEuler(msg->pose.pose.orientation).z;
+		double& x = msg->pose.pose.position.x;
+		double& y = msg->pose.pose.position.y;
 		
 
 		auto pubMsg = sensor_msgs::msg::LaserScan();
 		pubMsg.header.frame_id = "velodyne";
-		pubMsg.header.stamp = rclcpp::Clock().now();
+		pubMsg.header.stamp = msg->header.stamp;
 		pubMsg.angle_min = -3.1415927410125732;
 		pubMsg.angle_max = 3.1415927410125732;
 		pubMsg.angle_increment = 0.007000000216066837;
 		pubMsg.scan_time = 0;
 		pubMsg.range_min = 0;
 		pubMsg.range_max = 200.0;
+		
 		// int num_data_points = static_cast<int>((pubMsg.angle_max - pubMsg.angle_min) / pubMsg.angle_increment) + 1;
 		// printf("%d\n",num_data_points);
 		// 898
 		static std::vector<float> intensities(898, 0);
 		static std::vector<float> ranges(898, 199);
+		pubMsg.intensities = intensities;
+		pubMsg.ranges = ranges;
+
+		
+		if(isRun){
+			for(auto& it : ServiceBlockPos){
+				float xd = it.first - x;
+				float yd = it.second - y;
+				float distance = xd*xd + yd*yd;
+				if(distance - 200 > 0)
+					continue;
+
+				if(abs(xd) < 0.000001f)
+					xd = 0.000001f;
+
+				float angle = std::atan2(yd, xd) - direction;
+				if(angle < -3.1415927410125732)
+					angle += 2*3.1415927410125732;
+				if(angle > 3.1415927410125732)
+					angle -= 2*3.1415927410125732;
+				
+				int idx = static_cast<int>((angle + 3.1415927410125732) / pubMsg.angle_increment);
+
+				for(int i=-1;i<=1;i++){
+					int index = idx + i;
+					if(index < 0)
+						index = index + 898;
+					if(index >= 898)
+						index = index - 898;
+					pubMsg.intensities[index] = 250.f;
+					pubMsg.ranges[index] = sqrt(distance);
+				}
+			}
+		} 
 
 		for(auto& it : blockPos){
 			float xd = it.first - x;
@@ -83,9 +133,8 @@ private:
 			float distance = xd*xd + yd*yd;
 			if(distance - 200 > 0)
 				continue;
-			pubMsg.intensities = intensities;
-			pubMsg.ranges = ranges;
-			if(xd < 0.000001f)
+
+			if(abs(xd) < 0.000001f)
 				xd = 0.000001f;
 
 			float angle = std::atan2(yd, xd) - direction;
@@ -94,35 +143,32 @@ private:
 			if(angle > 3.1415927410125732)
 				angle -= 2*3.1415927410125732;
 			
-
 			int idx = static_cast<int>((angle + 3.1415927410125732) / pubMsg.angle_increment);
-			if(idx < 0)
-				idx = 0;
-			if(idx > 897)
-				idx = 897;
 
-			pubMsg.intensities[idx] = 250.f;
-			pubMsg.ranges[idx] = distance;
-			
-			printf("%f %f %f, %f, %d, %f, %f\n",xd,yd,distance,angle, idx ,std::atan2(yd, xd), direction);
-			(*publisher_).publish(pubMsg);
+			for(int i=-1;i<=1;i++){
+				int index = idx + i;
+				if(index < 0)
+					index = index + 898;
+				if(index >= 898)
+					index = index - 898;
+				pubMsg.intensities[index] = 250.f;
+				pubMsg.ranges[index] = sqrt(distance);
+			}
 		}
-
-	}
-
-    void odomCallback(const nav_msgs::msg::Odometry::SharedPtr msg) {
-        direction = msg->pose.pose.orientation.z * 3.1415927410125732;
+		
+	
+		(*publisher_).publish(pubMsg);
+		
     }
 
 private:
 	std::vector<std::pair<float,float>> blockPos;
+	std::vector<std::pair<float,float>> ServiceBlockPos;
 	rclcpp::Publisher<sensor_msgs::msg::LaserScan>::SharedPtr  publisher_;
-	rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr subscrition_;
 	rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
 	rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr service_;
 	
 	bool isRun = true;
-	float direction = 0;
 };
 
 int main(int argc, char* argv[]) {
