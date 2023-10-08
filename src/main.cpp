@@ -2,6 +2,7 @@
 #include <sensor_msgs/msg/laser_scan.hpp>
 #include <std_srvs/srv/set_bool.hpp>
 #include <std_msgs/msg/float32_multi_array.hpp>
+#include <std_msgs/msg/int32_multi_array.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <vector>
 #include <map>
@@ -34,11 +35,13 @@ public:
 		
 		odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
             "/odom", 10, std::bind(&ArtificialOccupy::odomCallback, this, std::placeholders::_1));
-    
+
+		state_sub_ = this->create_subscription<std_msgs::msg::Int32MultiArray>(
+            "/state", 10, std::bind(&ArtificialOccupy::stateCallback, this, std::placeholders::_1));
 
 		RCLCPP_INFO(this->get_logger(), "ArtificialOccupy : ON");
-		// blockPos.emplace_back(7, -2);
-		ServiceBlockPos.emplace_back(9, -2);
+		ServiceBlockPos.emplace_back(9.0625, -2.25);
+		ServiceBlockPos.emplace_back(436.125, -100);
 
 	}
 
@@ -61,6 +64,16 @@ private:
 		euler.z = std::atan2(t3, t4);
 
 		return euler;
+	}
+
+	void stateCallback(const std_msgs::msg::Int32MultiArray::SharedPtr msg){
+		auto& from = msg->data[0];
+		auto& to = msg->data[1];
+		if((from < 10 && to < 10) || (from >= 10 || to >= 10))
+			isRun = true; 
+		else
+			isRun = false;
+		
 	}
 
     void odomCallback(const nav_msgs::msg::Odometry::SharedPtr msg) {
@@ -166,6 +179,7 @@ private:
 	std::vector<std::pair<float,float>> ServiceBlockPos;
 	rclcpp::Publisher<sensor_msgs::msg::LaserScan>::SharedPtr  publisher_;
 	rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
+	rclcpp::Subscription<std_msgs::msg::Int32MultiArray>::SharedPtr state_sub_;
 	rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr service_;
 	
 	bool isRun = true;
