@@ -8,6 +8,7 @@
 #include <map>
 #include <chrono>
 #include <algorithm>
+#include "blockPos.hpp"
 
 
 class ArtificialOccupy : public rclcpp::Node {
@@ -42,7 +43,8 @@ public:
 		RCLCPP_INFO(this->get_logger(), "ArtificialOccupy : ON");
 		ServiceBlockPos.emplace_back(9.0625, -2.25);
 		ServiceBlockPos.emplace_back(436.125, -100);
-
+		input(blockPos);
+		input2(blockPos2);
 	}
 
 
@@ -128,7 +130,7 @@ private:
 				
 				int idx = static_cast<int>((angle + 3.1415927410125732) / pubMsg.angle_increment);
 
-				for(int i=-1;i<=1;i++){
+				for(int i=0;i<=0;i++){
 					int index = idx + i;
 					if(index < 0)
 						index = index + 898;
@@ -144,7 +146,7 @@ private:
 			float xd = it.first - x;
 			float yd = it.second - y;
 			float distance = xd*xd + yd*yd;
-			if(distance - 200 > 0)
+			if(distance - 5000 > 0)
 				continue;
 
 			if(abs(xd) < 0.000001f)
@@ -168,6 +170,34 @@ private:
 				pubMsg.ranges[index] = sqrt(distance);
 			}
 		}
+		for(auto& it : blockPos2){
+			float xd = it.first - x;
+			float yd = it.second - y;
+			float distance = xd*xd + yd*yd;
+			if(distance - 5000 > 0)
+				continue;
+
+			if(abs(xd) < 0.000001f)
+				xd = 0.000001f;
+
+			float angle = std::atan2(yd, xd) - direction;
+			if(angle < -3.1415927410125732)
+				angle += 2*3.1415927410125732;
+			if(angle > 3.1415927410125732)
+				angle -= 2*3.1415927410125732;
+			
+			int idx = static_cast<int>((angle + 3.1415927410125732) / pubMsg.angle_increment);
+
+			for(int i=-10;i<=10;i++){
+				int index = idx + i;
+				if(index < 0)
+					index = index + 898;
+				if(index >= 898)
+					index = index - 898;
+				pubMsg.intensities[index] = 250.f;
+				pubMsg.ranges[index] = sqrt(distance)- 0.05;
+			}
+		}
 		
 	
 		(*publisher_).publish(pubMsg);
@@ -176,6 +206,7 @@ private:
 
 private:
 	std::vector<std::pair<float,float>> blockPos;
+	std::vector<std::pair<float,float>> blockPos2;
 	std::vector<std::pair<float,float>> ServiceBlockPos;
 	rclcpp::Publisher<sensor_msgs::msg::LaserScan>::SharedPtr  publisher_;
 	rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
